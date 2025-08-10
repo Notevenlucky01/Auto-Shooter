@@ -9,13 +9,11 @@
     :root{--bg:#0b0f1a;--fg:#e6edf3;--muted:#8aa0b3;--acc:#59f1c8}
     html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;overflow:hidden}
     canvas{display:block;width:100vw;height:100vh;touch-action:none}
-    /* HUD */
     #ui{position:fixed;inset:0;pointer-events:none;display:grid;grid-template-rows:auto 1fr auto;padding:12px}
     #hud{display:flex;gap:12px;align-items:center;justify-content:space-between}
     .pill{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);padding:6px 10px;border-radius:999px;font-weight:600}
     #titleBar{display:flex;gap:10px;align-items:center}
     #titleBar .dot{width:8px;height:8px;border-radius:50%;background:var(--acc);box-shadow:0 0 8px var(--acc)}
-    /* Zentraler Start/Info-Screen – wirklich mittig */
     #centerMsg{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:24px;pointer-events:auto}
     #centerCard{max-width:640px;width:min(92vw,640px);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:20px 16px;backdrop-filter:blur(6px)}
     #centerCard h2{margin:0 0 8px;font-size:26px}
@@ -23,7 +21,6 @@
     #centerCard .btns{margin-top:14px;display:flex;gap:10px;justify-content:center}
     button{pointer-events:auto;cursor:pointer;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:var(--fg);border-radius:12px;padding:10px 14px;font-weight:700;letter-spacing:.3px;transition:transform .06s ease,background .2s ease}
     button:hover{background:rgba(255,255,255,.14)} button:active{transform:translateY(1px) scale(.995)}
-    /* Mobile Touch-Buttons unten (nur auf kleinen Screens) */
     #controls{pointer-events:none;position:fixed;left:0;right:0;bottom:calc(18px + env(safe-area-inset-bottom));display:flex;justify-content:space-between;padding:0 18px;gap:12px}
     .ctrlBtn{pointer-events:auto;width:44vw;max-width:280px;height:64px;border-radius:16px;border:1px dashed rgba(255,255,255,.22);background:rgba(255,255,255,.05);font-weight:800;backdrop-filter:blur(6px)}
     @media (min-width:900px){#controls{display:none}}
@@ -32,7 +29,6 @@
 <body>
   <canvas id="game"></canvas>
 
-  <!-- HUD -->
   <div id="ui" aria-hidden="true">
     <div id="hud">
       <div id="titleBar"><div class="dot"></div><div>Endless Auto-Shooter</div></div>
@@ -45,7 +41,6 @@
     </div>
   </div>
 
-  <!-- Mittig zentriertes Overlay -->
   <div id="centerMsg">
     <div id="centerCard">
       <h2>Tippe zum Starten</h2>
@@ -57,7 +52,6 @@
     </div>
   </div>
 
-  <!-- Mobile-Steuerung -->
   <div id="controls">
     <button id="btnLeft" class="ctrlBtn">⟵ Links</button>
     <button id="btnRight" class="ctrlBtn">Rechts ⟶</button>
@@ -67,7 +61,7 @@
 (() => {
   'use strict';
 
-  // ===== Canvas / Size =====
+  // DOM refs
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   const hudScore = document.getElementById('score');
@@ -80,6 +74,9 @@
   const btnRight = document.getElementById('btnRight');
   const btnAudio = document.getElementById('btnAudio');
 
+  // --- Fix: player vor resize() deklarieren und in resize() nur nutzen, wenn vorhanden
+  let player = null;
+
   let DPR=1, W=0, H=0;
   function resize(){
     DPR = window.devicePixelRatio || 1;
@@ -88,12 +85,12 @@
     canvas.style.width  = window.innerWidth + 'px';
     canvas.style.height = window.innerHeight + 'px';
     laneX = computeLanes();
-    player.y = H * 0.78;
+    if (player) player.y = H * 0.78; // <- nur wenn bereits definiert
   }
   window.addEventListener('resize', resize, {passive:true});
   resize();
 
-  // ===== Game constants =====
+  // Game constants
   const LANES=3, LANE_MARGIN=0.17;
   const BULLET_SPEED = 9*DPR;
   const ENEMY_BASE_SPEED=3.1*DPR, ENEMY_SPAWN_BASE=900;
@@ -107,12 +104,11 @@
   let laneX = computeLanes();
 
   const State={INIT:0,RUN:1,DEAD:2,PAUSE:3}; let state=State.INIT;
-  let player={ lane:1, x:laneX[1], y:H*0.78, size:PLAYER_SIZE, fireCd:0, baseFire:180, fireInterval:180, moveAnim:0, shield:false };
   const bullets=[], enemies=[], particles=[], powerups=[];
   let dist=0, score=0, multiplier=1, lastTime=0, spawnTimer=0, runTime=0, powerTimer=0;
   const ActivePU={ rapid:0, spread:0 };
 
-  // ===== Mobile-robustes Audio (funktioniert sicher nach erstem Tap) =====
+  // Audio (mobile-safe)
   let audio={ ctx:null, master:null, musicGain:null, sfxGain:null, loopId:null, enabled:true, unlocked:false };
   function initAudio(){
     if (audio.ctx) return;
@@ -124,7 +120,6 @@
     const sfxGain   = ctxA.createGain(); sfxGain.gain.value=0.8;   sfxGain.connect(master);
     audio = { ...audio, ctx:ctxA, master, musicGain, sfxGain };
   }
-  // iOS/Android "unlock": kurzer stummer Ton beim ersten User-Tap
   function unlockAudio(){
     if (!audio.ctx || audio.unlocked) return;
     const o = audio.ctx.createOscillator(); const g = audio.ctx.createGain();
@@ -133,7 +128,6 @@
     if (audio.ctx.state === 'suspended') audio.ctx.resume();
     audio.unlocked = true;
   }
-  // leichte, unaufdringliche Musik
   function startMusic(){
     if (!audio.ctx || !audio.enabled) return;
     stopMusic();
@@ -163,25 +157,21 @@
     osc.start(now); osc.stop(now+attack+dur+release+0.02);
   }
 
-  // ===== Input =====
-  function moveLane(dir){ if(state!==State.RUN) return; const nl=Math.min(LANES-1,Math.max(0,player.lane+dir)); if(nl!==player.lane){ player.lane=nl; player.moveAnim=1; } }
+  // Input
+  function moveLane(dir){ if(state!==State.RUN) return; const nl=Math.min(LANES-1,Math.max(0,(player.lane||1)+dir)); if(nl!==(player.lane||1)){ player.lane=nl; player.moveAnim=1; } }
   window.addEventListener('keydown',e=>{ if(e.repeat) return; if(e.code==='ArrowLeft'||e.code==='KeyA') moveLane(-1); if(e.code==='ArrowRight'||e.code==='KeyD') moveLane(1); if(e.code==='Space') togglePause(); });
 
-  // Tap links/rechts → Spurwechsel, erster Tap startet Audio
   canvas.addEventListener('pointerdown', (e)=>{
     initAudio(); unlockAudio();
     if (state!==State.RUN) { startGame(); return; }
     const mid = window.innerWidth/2;
     if (e.clientX < mid) moveLane(-1); else moveLane(1);
   }, {passive:true});
-  document.addEventListener('visibilitychange', ()=>{ // Musik pausieren, wenn Tab inaktiv
-    if (!audio.ctx) return;
-    if (document.hidden) stopMusic(); else if (state===State.RUN && audio.enabled) startMusic();
-  });
 
-  // ===== UI Buttons =====
+  document.addEventListener('visibilitychange', ()=>{ if (!audio.ctx) return; if (document.hidden) stopMusic(); else if (state===State.RUN && audio.enabled) startMusic(); });
+
   btnStart.addEventListener('click', ()=>{ initAudio(); unlockAudio(); startGame(); });
-  btnHow.addEventListener('click', ()=>showCenter('So spielst du','Tippe links/rechts zum Ausweichen. Auto-Schuss. Sammle Power-Ups. Tippe erneut für Pause/Fortsetzen.') );
+  btnHow.addEventListener('click', ()=>showCenter('So spielst du','Tippe links/rechts zum Ausweichen. Auto-Schuss. Sammle Power-Ups. Erster Tap schaltet Ton frei.') );
   btnLeft .addEventListener('click', ()=>moveLane(-1));
   btnRight.addEventListener('click', ()=>moveLane(1));
 
@@ -192,7 +182,6 @@
     centerMsg.style.display='grid';
   }
 
-  // ===== Game loop & drawing (kompakt gelassen) =====
   function spawnEnemy(){
     const lane=(Math.random()*LANES)|0;
     const speed=ENEMY_BASE_SPEED+(runTime/60000)*2*DPR; const size=24*DPR;
@@ -204,14 +193,14 @@
     powerups.push({ lane, x:laneX[lane], y:-size*2, size, type, speed: ENEMY_BASE_SPEED*0.9 });
   }
   function applyPowerUp(type){
-    if (type==='shield'){ player.shield=true; addBurst(player.x,player.y,'rgba(183,148,246,0.9)',24); return; }
+    if (type==='shield'){ player.shield=true; return; }
     if (type==='rapid'){ ActivePU.rapid=12000; }
     if (type==='spread'){ ActivePU.spread=12000; }
   }
   function updatePowerTimers(dt){
     if (ActivePU.rapid>0) ActivePU.rapid -= dt;
     if (ActivePU.spread>0) ActivePU.spread -= dt;
-    player.fireInterval = Math.max(70, player.baseFire - (ActivePU.rapid>0?90:0) - runTime/1200);
+    player.fireInterval = Math.max(70, (player.baseFire||180) - (ActivePU.rapid>0?90:0) - runTime/1200);
   }
   function shoot(){
     const base={ x:player.x, y:player.y-player.size*0.7, vy:-BULLET_SPEED, size:6*DPR, life:2000 };
@@ -219,7 +208,6 @@
     if (ActivePU.spread>0){ bullets.push({ ...base, x:base.x-16*DPR }); bullets.push({ ...base, x:base.x+16*DPR }); }
   }
   function circleHit(a,b){ const dx=a.x-b.x, dy=a.y-b.y; const r=a.size+b.size; return dx*dx+dy*dy<=r*r; }
-  function addBurst(x,y,color,n=8){ for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2; const s=(Math.random()*2+1)*DPR; particles.push({ x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:400+Math.random()*300,color }); } }
 
   function drawBG(dt){ ctx.fillStyle='#0b0f1a'; ctx.fillRect(0,0,W,H); }
   function drawPlayer(p){
@@ -286,11 +274,6 @@
   }
   requestAnimationFrame(loop);
 
-  // Initiale Hilfe
-  function showHelp(){ showCenter('Hilfe','Tippe links/rechts zum Ausweichen. Der erste Tap schaltet die Musik auf Mobilgeräten frei.'); }
-  btnHow.addEventListener('click', showHelp);
-
-  // Startscreen bleibt sichtbar, bis Benutzer tappt → Audio wird zuverlässig freigeschaltet
 })();
 </script>
 </body>
