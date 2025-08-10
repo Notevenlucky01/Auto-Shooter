@@ -74,21 +74,27 @@
   const btnRight = document.getElementById('btnRight');
   const btnAudio = document.getElementById('btnAudio');
 
-  // --- Fix: player vor resize() deklarieren und in resize() nur nutzen, wenn vorhanden
-  let player = null;
+// Fix: frühe Deklarationen
+let player = null;
+let laneX = [];
+let DPR = 1, W = 0, H = 0;
+
+// Falls diese Konstanten weiter unten stehen, hierher ziehen (und unten entfernen)
+const LANES = 3, LANE_MARGIN = 0.17;
 
   let DPR=1, W=0, H=0;
-  function resize(){
-    DPR = window.devicePixelRatio || 1;
-    W = canvas.width  = Math.max(320, Math.floor(window.innerWidth * DPR));
-    H = canvas.height = Math.max(480, Math.floor(window.innerHeight * DPR));
-    canvas.style.width  = window.innerWidth + 'px';
-    canvas.style.height = window.innerHeight + 'px';
-    laneX = computeLanes();
-    if (player) player.y = H * 0.78; // <- nur wenn bereits definiert
-  }
-  window.addEventListener('resize', resize, {passive:true});
-  resize();
+ function resize(){
+  DPR = window.devicePixelRatio || 1;
+  W = canvas.width  = Math.max(320, Math.floor(window.innerWidth * DPR));
+  H = canvas.height = Math.max(480, Math.floor(window.innerHeight * DPR));
+  canvas.style.width  = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+
+  laneX = computeLanes();        // jetzt gültig, weil laneX oben deklariert ist
+  if (player) player.y = H * 0.78; // nur, wenn player schon existiert
+}
+window.addEventListener('resize', resize, { passive: true });
+resize(); // bleibt direkt danach
 
   // Game constants
   const LANES=3, LANE_MARGIN=0.17;
@@ -101,7 +107,6 @@
     const pad=W*LANE_MARGIN, usable=W-pad*2;
     return Array.from({length:LANES},(_,i)=>Math.round(pad + usable*(i+0.5)/LANES));
   }
-  let laneX = computeLanes();
 
   const State={INIT:0,RUN:1,DEAD:2,PAUSE:3}; let state=State.INIT;
   const bullets=[], enemies=[], particles=[], powerups=[];
