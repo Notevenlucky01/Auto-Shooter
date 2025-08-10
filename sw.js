@@ -1,4 +1,4 @@
-const CACHE = 'auto-shooter-v1';
+const CACHE = 'auto-shooter-v2';
 const ASSETS = [
   './',
   './index.html',
