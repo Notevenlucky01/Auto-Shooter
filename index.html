@@ -2,215 +2,63 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#0b0f1a">
-  <title>Endless Auto‑Shooter</title>
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Auto-Shooter – Diagnose</title>
   <style>
-    html, body { margin:0; padding:0; background:#0b0f1a; height:100%; overflow:hidden; }
-    canvas { display:block; width:100vw; height:100vh; touch-action:none; }
-    #installBar { position: fixed; left: 0; right: 0; bottom: env(safe-area-inset-bottom); display: none; gap: 8px; padding: 12px env(safe-area-inset-right) calc(12px + env(safe-area-inset-bottom)) env(safe-area-inset-left); background: rgba(255,255,255,.06); border-top: 1px solid rgba(255,255,255,.12); color: #e6edf3; backdrop-filter: blur(6px); }
-    #installBar button { font-weight: 700; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.1); color: #e6edf3; padding: 10px 14px; border-radius: 12px; }
-    #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom)); background: rgba(0,0,0,0.7); color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px; display: none; }
+    html,body{margin:0;height:100%;background:#0b0f1a;color:#e6edf3;font-family:system-ui}
+    #log{position:fixed;left:8px;right:8px;bottom:8px;max-height:40vh;overflow:auto;background:rgba(0,0,0,.5);padding:8px;border-radius:8px;font-size:12px;white-space:pre-wrap}
+    canvas{display:block;width:100vw;height:100vh;touch-action:none}
   </style>
 </head>
 <body>
-  <canvas id="game"></canvas>
-  <div id="installBar" role="region" aria-live="polite">
-    <div style="flex:1">Zum Startbildschirm hinzufügen?</div>
-    <button id="btnInstall">Installieren</button>
-  </div>
-  <div id="toast"></div>
-
+<canvas id="game"></canvas>
+<pre id="log">Lade…</pre>
 <script>
-// ====== PWA bootstrap (register Service Worker + A2HS prompt) ======
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(console.error);
-  });
-}
-let deferredPrompt = null;
-const installBar = document.getElementById('installBar');
-const btnInstall = document.getElementById('btnInstall');
-const toast = document.getElementById('toast');
+(function(){
+  const logEl = document.getElementById('log');
+  function log(msg){ logEl.textContent += '\\n' + msg; }
+  window.onerror = (m, s, l, c, e) => { log('Error: ' + m + ' @ ' + s + ':' + l); };
+  window.onunhandledrejection = (ev) => { log('Promise error: ' + (ev.reason && ev.reason.stack || ev.reason)); };
 
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  installBar.style.display = 'flex';
-});
-btnInstall.addEventListener('click', async () => {
-  if (!deferredPrompt) return;
-  installBar.style.display = 'none';
-  deferredPrompt.prompt();
-  const { outcome } = await deferredPrompt.userChoice;
-  deferredPrompt = null;
-  if (outcome === 'accepted') showToast('Installiert – auf dem Homescreen starten!');
-});
-
-function showToast(msg){
-  toast.textContent = msg; toast.style.display = 'block';
-  setTimeout(()=> toast.style.display = 'none', 2600);
-}
-
-// ====== Game (from your latest version, tuned for mobile) ======
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-let W, H, DPR;
-
-function resize(){
-  DPR = window.devicePixelRatio || 1;
-  W = canvas.width = Math.max(320, Math.floor(window.innerWidth * DPR));
-  H = canvas.height = Math.max(480, Math.floor(window.innerHeight * DPR));
-  canvas.style.width = window.innerWidth + 'px';
-  canvas.style.height = window.innerHeight + 'px';
-  laneX = computeLanes();
-  player.y = H * 0.78;
-}
-window.addEventListener('resize', resize, { passive:true });
-resize();
-
-const LANES = 3;
-const LANE_MARGIN = 0.17;
-const PLAYER_SIZE = 28 * DPR;
-const BULLET_SPEED = 9 * DPR;
-const ENEMY_BASE_SPEED = 3.1 * DPR;
-const ENEMY_SPAWN_BASE = 900;
-const DIST_PER_SEC = 25;
-const POWER_SPAWN_EVERY = 5200;
-
-function computeLanes(){
-  const pad = W * LANE_MARGIN; const usable = W - pad * 2;
-  return Array.from({length:LANES},(_,i)=>Math.round(pad + usable * (i+0.5) / LANES));
-}
-let laneX = computeLanes();
-
-const State = { INIT:0, RUN:1, DEAD:2, PAUSE:3 };
-let state = State.INIT;
-
-let player = { lane:1, x:laneX[1], y:H*0.78, size:PLAYER_SIZE, fireCd:0, baseFire:180, fireInterval:180, moveAnim:0, shield:false };
-const bullets = []; const enemies = []; const particles = []; const powerups = [];
-let dist = 0, score = 0, multiplier = 1, lastTime = 0, spawnTimer = 0, runTime = 0, powerTimer = 0;
-
-const ActivePU = { rapid:0, spread:0 };
-
-function spawnPowerUp(){
-  const lane = (Math.random()*LANES)|0; const size = 18*DPR; const types = ['rapid','spread','shield'];
-  const type = types[(Math.random()*types.length)|0];
-  powerups.push({ lane, x: laneX[lane], y: -size*2, size, type, speed: ENEMY_BASE_SPEED*0.9 });
-}
-function applyPowerUp(type){
-  if (type==='shield'){ player.shield=true; addBurst(player.x, player.y, 'rgba(183,148,246,0.9)', 24); return; }
-  if (type==='rapid'){ ActivePU.rapid=12000; }
-  if (type==='spread'){ ActivePU.spread=12000; }
-}
-function updatePowerTimers(dt){
-  if (ActivePU.rapid>0) ActivePU.rapid -= dt;
-  if (ActivePU.spread>0) ActivePU.spread -= dt;
-  player.fireInterval = Math.max(70, player.baseFire - (ActivePU.rapid>0?90:0) - runTime/1200);
-}
-
-function circleHit(a,b){ const dx=a.x-b.x, dy=a.y-b.y; const r=a.size+b.size; return dx*dx+dy*dy<=r*r; }
-function addBurst(x,y,color,n=8){ for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2; const s=(Math.random()*2+1)*DPR; particles.push({ x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:400+Math.random()*300,color }); } }
-
-function drawBG(dt){ ctx.fillStyle='#0b0f1a'; ctx.fillRect(0,0,W,H); }
-function roundRectPath(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
-
-function drawPlayer(p){
-  const s=p.size, x=p.x, y=p.y;
-  ctx.save(); ctx.translate(x,y);
-  if (player.shield){ ctx.beginPath(); ctx.arc(0,0,s*1.25,0,Math.PI*2); ctx.strokeStyle='rgba(183,148,246,0.6)'; ctx.lineWidth=3*DPR; ctx.shadowColor='rgba(183,148,246,0.7)'; ctx.shadowBlur=12*DPR; ctx.stroke(); }
-  ctx.beginPath(); ctx.moveTo(0,-s*1.0); ctx.lineTo(-s*0.7,s*0.9); ctx.lineTo(s*0.7,s*0.9); ctx.closePath();
-  ctx.strokeStyle='rgba(89,241,200,0.9)'; ctx.lineWidth=3*DPR; ctx.shadowColor='rgba(89,241,200,0.8)'; ctx.shadowBlur=12*DPR; ctx.stroke();
-  ctx.restore();
-}
-function drawEnemy(e){
-  ctx.save(); ctx.translate(e.x,e.y);
-  const r=e.size;
-  roundRectPath(-r,-r,r*2,r*2,6*DPR);
-  ctx.strokeStyle='rgba(255,92,122,0.9)'; ctx.lineWidth=3*DPR; ctx.shadowColor='rgba(255,92,122,0.7)'; ctx.shadowBlur=10*DPR; ctx.stroke();
-  ctx.fillStyle='rgba(255,92,122,0.08)'; ctx.fill();
-  ctx.restore();
-}
-function drawBullet(b){ ctx.save(); ctx.translate(b.x,b.y); ctx.beginPath(); ctx.arc(0,0,b.size,0,Math.PI*2); ctx.fillStyle='rgba(89,241,200,0.95)'; ctx.shadowColor='rgba(89,241,200,0.9)'; ctx.shadowBlur=12*DPR; ctx.fill(); ctx.restore(); }
-function drawPowerUp(pu){ ctx.save(); ctx.translate(pu.x,pu.y); const r=pu.size; ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); let col='rgba(255,209,102,0.9)'; if(pu.type==='rapid') col='rgba(89,241,200,0.9)'; if(pu.type==='spread') col='rgba(255,209,102,0.9)'; if(pu.type==='shield') col='rgba(183,148,246,0.9)'; ctx.strokeStyle=col; ctx.lineWidth=3*DPR; ctx.shadowColor=col; ctx.shadowBlur=10*DPR; ctx.stroke(); ctx.globalAlpha=0.15; ctx.fillStyle=col; ctx.fill(); ctx.globalAlpha=1; ctx.restore(); }
-function drawParticles(){ for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; ctx.globalAlpha=Math.max(0,p.life/500); ctx.fillStyle=p.color; ctx.fillRect(p.x,p.y,2*DPR,2*DPR); ctx.globalAlpha=1; } }
-
-function shoot(){
-  const base={ x:player.x, y:player.y-player.size*0.7, vy:-BULLET_SPEED, size:6*DPR, life:2000 };
-  bullets.push({ ...base });
-  if(ActivePU.spread>0){ bullets.push({ ...base, x:base.x-16*DPR }); bullets.push({ ...base, x:base.x+16*DPR }); }
-}
-function spawnEnemy(){
-  const lane=(Math.random()*LANES)|0;
-  const speed=ENEMY_BASE_SPEED+(runTime/60000)*2*DPR; const size=24*DPR;
-  enemies.push({ lane, x:laneX[lane], y:-size, size, hp:1, speed });
-}
-
-function renderPowerBar(){ /* omitted in the compact mobile build */ }
-
-function reset(){
-  player = { lane:1, x:laneX[1], y:H*0.78, size:PLAYER_SIZE, fireCd:0, baseFire:180, fireInterval:180, moveAnim:0, shield:false };
-  bullets.length=0; enemies.length=0; particles.length=0; powerups.length=0;
-  dist=0; score=0; multiplier=1; spawnTimer=0; runTime=0; powerTimer=0; lastTime=0; ActivePU.rapid=0; ActivePU.spread=0;
-  state=State.RUN;
-}
-function moveLane(dir){ if(state!==State.RUN) return; const nl = Math.min(LANES-1, Math.max(0, player.lane+dir)); if(nl!==player.lane){ player.lane=nl; } }
-
-let lastTapX = null;
-canvas.addEventListener('touchstart', (e)=>{
-  const x = e.touches[0].clientX;
-  if (lastTapX === null) lastTapX = x;
-  if (x < window.innerWidth * 0.5) moveLane(-1); else moveLane(1);
-}, {passive:true});
-canvas.addEventListener('touchmove', (e)=>{
-  if (!e.touches.length) return;
-  const x = e.touches[0].clientX;
-  const mid = window.innerWidth * (player.lane + 0.5) / LANES;
-  if (x < mid - 24) moveLane(-1);
-  else if (x > mid + 24) moveLane(1);
-}, {passive:true});
-canvas.addEventListener('touchend', ()=>{ lastTapX = null; }, {passive:true});
-
-function loop(ts){
-  if (!lastTime) lastTime = ts; const dt = ts - lastTime; lastTime = ts;
-  if (state===State.RUN){
-    runTime+=dt; dist+=(DIST_PER_SEC+runTime/3000)*(dt/1000); multiplier = 1+Math.min(4, Math.floor(runTime/15000));
-    const spawnEvery = Math.max(300, ENEMY_SPAWN_BASE - runTime*0.3); spawnTimer+=dt; if (spawnTimer>spawnEvery){ spawnTimer=0; spawnEnemy(); }
-    powerTimer+=dt; if (powerTimer>POWER_SPAWN_EVERY){ powerTimer=0; spawnPowerUp(); }
-    player.fireCd -= dt; if (player.fireCd<=0){ player.fireCd += player.fireInterval; shoot(); }
-    updatePowerTimers(dt);
-    for (let i=bullets.length-1; i>=0; i--){ const b=bullets[i]; b.y += -BULLET_SPEED; b.life -= dt; if (b.y < -20*DPR || b.life<=0) bullets.splice(i,1); }
-    for (let i=enemies.length-1; i>=0; i--){ const e=enemies[i]; e.y += e.speed; if (e.y - e.size > H+40*DPR){ enemies.splice(i,1); continue; }
-      if (e.lane===player.lane){ const pHit={x:player.x,y:player.y,size:player.size*0.8}; if (circleHit(pHit,e)){ state=State.DEAD; } }
-    }
-    for (let i=enemies.length-1; i>=0; i--){ const e=enemies[i];
-      for (let j=bullets.length-1; j>=0; j--){ const b=bullets[j];
-        if (Math.abs(b.x-e.x)<e.size+14*DPR && Math.abs(b.y-e.y)<e.size+14*DPR){
-          if (circleHit({x:b.x,y:b.y,size:b.size*0.9},{x:e.x,y:e.y,size:e.size})){
-            bullets.splice(j,1); enemies.splice(i,1); score += 10*multiplier; break;
-          }
-        }
-      }
-    }
-    player.x += (laneX[player.lane]-player.x)*0.25;
-  } else if (state===State.DEAD){
-    // Tap to restart
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(regs=>{
+      if(regs.length){ regs.forEach(r=>r.unregister()); log('Service Worker deaktiviert (Diagnose-Modus).'); }
+    });
   }
-  drawBG(dt);
-  for (const e of enemies) drawEnemy(e);
-  for (const b of bullets) drawBullet(b);
-  for (const pu of powerups) drawPowerUp(pu);
-  drawPlayer(player);
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  function resize(){
+    const DPR = window.devicePixelRatio || 1;
+    canvas.width  = Math.max(320, Math.floor(window.innerWidth * DPR));
+    canvas.height = Math.max(480, Math.floor(window.innerHeight * DPR));
+    canvas.style.width  = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+  }
+  window.addEventListener('resize', resize, {passive:true});
+  resize();
+
+  // Sichtbarer Render-Test
+  function drawBG(){
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#0b0f1a';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = 'rgba(89,241,200,.25)';
+    ctx.fillRect(0, H*0.7, W, H*0.3);
+    ctx.fillStyle = '#e6edf3';
+    ctx.fillText('Diagnose-Build läuft. Wenn du das siehst, rendert Canvas.', 16, 28);
+  }
+
+  let last = 0;
+  function loop(t){
+    if(!last) last = t;
+    drawBG();
+    requestAnimationFrame(loop);
+  }
   requestAnimationFrame(loop);
-}
-reset();
-requestAnimationFrame(loop);
-// Tap to (re)start
-canvas.addEventListener('click', ()=>{ if (state!==State.RUN){ reset(); showToast('Los geht’s!'); } });
+  log('Diagnose-Loop gestartet. Wenn die Seite trotzdem leer ist, ist vermutlich das CSS/DOM blockiert.');
+
+})();
 </script>
 </body>
 </html>
